@@ -48,7 +48,7 @@ class GenPromptEmb(nn.Module):
             values_str = ", ".join([str(int(value)) for value in values])
 
         # Last token
-        trends = torch.sum(torch.diff(in_data[i, :, j].flatten()))#其实就是最后一个元素减掉第一个元素
+        trends = torch.sum(torch.diff(in_data[i, :, j].flatten()))  # Net change from the first to the last value.
         trends_str = f"{trends.item():.3f}" if self.is_web_traffic else f"{trends.item():0f}"
         
         # Date
@@ -74,7 +74,7 @@ class GenPromptEmb(nn.Module):
     def forward(self, tokenized_prompt):
         with torch.no_grad():
             prompt_embeddings = self.model(tokenized_prompt).last_hidden_state
-        return prompt_embeddings#保存最后一层隐藏层
+        return prompt_embeddings  # Return the final hidden layer.
 
     def generate_embeddings(self, in_data, in_data_mark):
         input_templates = {
@@ -101,7 +101,7 @@ class GenPromptEmb(nn.Module):
         tokenized_prompts = []
         max_token_count = 0
         for i in range(len(in_data)):
-            for j in range(in_data.shape[2]):  # 遍历每个通道（变量）
+            for j in range(in_data.shape[2]):  # Iterate over channels (variables).
                 template = input_template
                 if self.data_path == 'WikiPopular' and j < len(self.page_texts):
                     # Keep the static context bounded so numeric history remains in GPT-2's context window.

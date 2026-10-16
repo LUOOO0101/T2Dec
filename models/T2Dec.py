@@ -27,12 +27,13 @@ class series_decomp(nn.Module):
         return x_trend, x_detail
 
 # ======================
-# 实验三：正交解耦对齐适配器 (Orthogonal Decoupling Alignment)
+# Orthogonal decoupling alignment adapter.
 # ======================
 class OrthogonalDecouplingAdapter(nn.Module):
     """
-    针对 统计提示词文本 + 时序特征 的正交解耦适配器
-    目的：剥离时序特征中与统计文本重叠的宏观信息，保留纯粹的微观动态规律进行互补融合。
+    Orthogonally decouple statistical prompt features from temporal features.
+    Remove overlapping global information while retaining local temporal dynamics
+    for complementary fusion.
     """
     def __init__(self, channel):
         super().__init__()
@@ -42,8 +43,8 @@ class OrthogonalDecouplingAdapter(nn.Module):
         self.cross_norm = nn.LayerNorm(channel)
 
     def forward(self, ts_feat, cross_feat):
-        # ts_feat: [B, C, N] (原始时序微观特征)
-        # cross_feat: [B, C, N] (统计文本宏观特征)
+        # ts_feat: [B, C, N], local temporal features.
+        # cross_feat: [B, C, N], global statistical-text features.
         ts_h = ts_feat.permute(0, 2, 1)
         cross_h = cross_feat.permute(0, 2, 1)
 
@@ -101,11 +102,8 @@ class T2Dec(nn.Module):
                                                                norm_first = True,dropout = self.dropout_n).to(self.device)
         self.prompt_encoder = nn.TransformerEncoder(self.prompt_encoder_layer, num_layers = self.e_layer).to(self.device)
 
-        # ======================
-        # 🔥 增强版交互逻辑 (Scenario 1)
-        # 1. 文本特征投影层
-        # 2. 时频增强型 CrossModal
-        # ======================
+        # Enhanced cross-modal interaction.
+        # Project text features and apply frequency-aware cross-modal attention.
         self.text_proj = nn.Linear(self.d_llm, self.channel).to(self.device)
         self.cross = CrossModal(d_model=self.channel, n_heads=head, d_ff=self.d_ff, dropout=self.dropout_n).to(self.device)
 
@@ -114,17 +112,12 @@ class T2Dec(nn.Module):
 
         self.c_to_length = nn.Linear(self.channel, self.pred_len, bias=True).to(self.device)
 
-        # ======================
-        # 加入适配器（正交解耦型）
-        # ======================
+        # Orthogonal decoupling adapter.
         self.adapter = OrthogonalDecouplingAdapter(channel=self.channel).to(self.device)
 
-        # ======================
-        # 新增：动态融合门控 (Dynamic Fusion Gate)
-        # 根据文本特征生成权重，动态调节波动分量的贡献度
-        # ======================
+        # Generate a dynamic gate from text features to balance the components.
         self.fusion_gate = nn.Sequential(
-            nn.Linear(self.channel * 2, self.channel // 2),  # 输入改成 2*C
+            nn.Linear(self.channel * 2, self.channel // 2),
             nn.ReLU(),
             nn.Linear(self.channel // 2, 1),
             nn.Sigmoid()
@@ -159,18 +152,14 @@ class T2Dec(nn.Module):
         embeddings = self.prompt_encoder(embeddings)
         embeddings = embeddings.permute(0,2,1)
 
-        # ======================
-        # 🔥 增强版交互逻辑 (Scenario 1)
-        # ======================
+        # Enhanced cross-modal interaction.
         text_feat = self.text_proj(embeddings.permute(0, 2, 1)) 
         
         ts_q = enc_out.permute(0, 2, 1)  # [B, N, C]
         cross_out = self.cross(ts_q, text_feat, text_feat)  # [B, N, C]
         cross_out = cross_out.permute(0, 2, 1)  # [B, C, N]
         
-        # ======================
-        # 前向干预：正交解耦
-        # ======================
+        # Orthogonally decouple temporal and cross-modal features.
         micro_feat, ortho_loss = self.adapter(enc_out, cross_out) 
         
         # ===== Branch =====
@@ -178,28 +167,28 @@ class T2Dec(nn.Module):
         micro_feat_perm = micro_feat.permute(0, 2, 1)
         cross_perm = cross_out.permute(0, 2, 1)
 
-        # Trend（语义）
+        # Trend component.
         trend_feat = self.decoder(text_feat, cross_perm)
         y_trend = self.c_to_length(trend_feat)
 
-        # Detail（残差）
+        # Detail component.
         y_detail = self.c_to_length(micro_feat_perm)
 
-        # Fusion（动态）：让 alpha 控制文本趋势的信任度
+        # Dynamic fusion: alpha controls the contribution of the text-driven trend.
         # ======================
         fusion_input = torch.cat([text_feat, enc_out_perm], dim=-1)
         alpha = self.fusion_gate(fusion_input) 
 
-        # 分层预测结果：采用加权平均 (alpha 动态平衡)
+        # Combine the components using the learned gate.
         dec_out = alpha * y_trend + (1 - alpha) * y_detail
         
-        # 保存 loss
+        # Store the orthogonality loss for training.
         self.ortho_loss = ortho_loss
         
-        # 保存 alpha 以供可视化分析（可选）
+        # Store alpha for optional visualization.
         self.dynamic_alpha = alpha.detach()
         
-        # 记录分层分量用于监督训练：必须与 dec_out 中的项完全对应
+        # Keep supervised components consistent with the terms used in dec_out.
         self.pred_trend_norm = alpha * y_trend
         self.pred_detail_norm = (1 - alpha) * y_detail
         

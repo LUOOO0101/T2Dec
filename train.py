@@ -83,7 +83,7 @@ class trainer:
             dropout_n=dropout_n, d_llm=d_llm, e_layer=e_layer, d_layer=d_layer, head=head
         ).to(device)
         
-        self.decomp = series_decomp(kernel_size=kernel_size).to(device) # 真值分解器
+        self.decomp = series_decomp(kernel_size=kernel_size).to(device)  # Decompose the ground truth.
         self.gauss_center = gauss_center
         self.gauss_sigma = gauss_sigma
 
@@ -95,7 +95,7 @@ class trainer:
         print("The number of trainable parameters: {}".format(self.model.count_trainable_params()))
         print("The number of parameters: {}".format(self.model.param_num()))
         # print(self.model)
-# 冻结主干，只训练 adapter
+        # Train the adapter alongside the model.
         for param in self.model.parameters():
             param.requires_grad = True
 
@@ -106,22 +106,21 @@ class trainer:
         self.model.train()
         self.optimizer.zero_grad()
         
-        # 1. 模型预测 (同时获取分量)
+        # 1. Make predictions and retrieve their components.
         predict, pred_trend_norm, pred_detail_norm = self.model(input, mark, embeddings)
         
-        # 2. 真值分解 (需要先将 real 归一化，使其与 pred_trend/detail 尺度一致)
+        # 2. Normalize and decompose the target to match the prediction scale.
         # real: [B, Pred_Len, N]
         real_norm = self.model.normalize_layers(real, 'norm')
         gt_trend_norm, gt_detail_norm = self.decomp(real_norm)
         
-        # 3. 计算分层损失
-        loss_total = self.loss(predict, real) # 最终输出的 MSE
-        loss_trend = self.loss(pred_trend_norm, gt_trend_norm) # 趋势拟合
-        loss_detail = self.loss(pred_detail_norm, gt_detail_norm) # 细节拟合
+        # 3. Compute the component losses.
+        loss_total = self.loss(predict, real)  # Final output loss.
+        loss_trend = self.loss(pred_trend_norm, gt_trend_norm)  # Trend loss.
+        loss_detail = self.loss(pred_detail_norm, gt_detail_norm)  # Detail loss.
         
-        # --- 比例自动缩放 (Scaling by Pred_Len) ---
-        # 使用高斯核函数：在 gauss_center 附近权重最大，向两端衰减
-        # 这是一种“尺度感知”的 Loss 设计，比硬编码 if-else 更具泛化性
+        # Scale the hierarchical loss by prediction length.
+        # A Gaussian kernel gives the highest weight near gauss_center.
         lambda_hier = 0.1 + 0.4 * np.exp(-((self.model.pred_len - self.gauss_center)**2) / (2 * self.gauss_sigma**2))
         # lambda_hier=0
         loss = loss_total + lambda_hier * (loss_trend + loss_detail)
@@ -202,18 +201,17 @@ def main():
     loss = 9999999
     epochs_since_best_mse = 0
     bestid = 0
-    # 生成路径
-    # 修复：只对文件名/文件夹名中的非法字符进行替换，保留路径分隔符
+    # Build the output path.
     folder_name = (
         f"{args.pred_len}_{args.channel}_{args.e_layer}_{args.d_layer}_"
         f"{args.learning_rate}_{args.dropout_n}_bs{args.batch_size}_{args.target}_{args.seed}"
     )
-    # 替换非法字符（如 Windows 下的 : 等），但保留 / 路径分隔符
+    # Replace invalid filename characters while preserving path separators.
     safe_save = args.save.replace(':', '_')
     path = os.path.join(safe_save, args.data_path, folder_name)
-    path = path.rstrip('/') + '/' # 确保以 / 结尾以便后续拼接文件名
+    path = path.rstrip('/') + '/'  # Keep a trailing separator for filenames.
 
-    # 确保路径存在
+    # Create the output directory if needed.
     if not os.path.exists(path):
         os.makedirs(path)
 
@@ -349,7 +347,7 @@ def main():
     amse = []
     amae = []
     
-    # 准备保存结果的列表
+    # Prepare the result log.
     res_logs = []
     res_logs.append(f"The epoch of the best result: {bestid}\n")
     res_logs.append(f"The valid loss of the best model: {round(his_loss[bestid - 1], 4)}\n\n")
@@ -368,7 +366,7 @@ def main():
     print(avg_log.format(np.mean(amse), np.mean(amae)))
     res_logs.append("\n" + avg_log.format(np.mean(amse), np.mean(amae)) + "\n")
     
-    # 将结果写入文件
+    # Write the results to a file.
     with open(os.path.join(path, "test_results.txt"), "w") as f:
         f.writelines(res_logs)
 
